@@ -1,0 +1,52 @@
+name: Dungeon check
+
+# Runs the example test against the live dungeon: proof that the site is up
+# and that a fresh copy of this kit still works. Public repo, so free minutes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Daily at 11:13 UTC (6:13 a.m. Eastern).
+    - cron: '13 11 * * *'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      # The dungeon's free server sleeps when idle and can take a minute to wake.
+      - name: Wake the dungeon
+        run: curl -sS --retry 12 --retry-delay 10 --retry-all-errors -o /dev/null -w "%{http_code}\n" https://playwright-dungeon-crawl.onrender.com/health
+
+      - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Type-check
+        run: npx --yes -p typescript tsc -p .
+
+      - name: Run the example test
+        run: npx playwright test --reporter=list,junit
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: test-results/junit.xml
+
+      # Only once the repo has the Grafana secrets (OTEL_EXPORTER_OTLP_ENDPOINT and _HEADERS).
+      - name: Send test results to Grafana
+        if: always() && env.OTLP_ENDPOINT != ''
+        uses: gillersja1/test-results-otel@v1
+        with:
+          results: test-results/junit.xml
+          suite: dungeon-check
+          otlp-endpoint: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          otlp-headers: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
